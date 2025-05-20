@@ -20,7 +20,7 @@ interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
 }
 
-const REQUEST_DELAY_MS = 1100; // Delay between AI requests to avoid rate limiting (e.g., 1.1 seconds for ~54 RPM)
+const REQUEST_DELAY_MS = 1500; // Delay between AI requests to avoid rate limiting (1.5 seconds)
 
 export function AppValidationDashboard({ initialValidationRecords }: AppValidationDashboardProps) {
   const [file, setFile] = useState<File | null>(null);
@@ -51,7 +51,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       return;
     }
     setIsLoadingCsv(true);
-    toast({ title: "Processing CSV...", description: "Please wait, this may take a while for larger files due to API rate limits.", variant: "default", duration: 10000});
+    toast({ title: "Processing CSV...", description: "Displaying results live. Please wait, this may take a while for larger files due to API rate limits.", variant: "default", duration: 10000});
 
     try {
       const fileContent = await file.text();
@@ -74,13 +74,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         return;
       }
 
-      const newRecords: AppCategoryCheck[] = [];
       const dataRows = lines.slice(1);
       let processedCount = 0;
 
       for (let i = 0; i < dataRows.length; i++) {
         const rowString = dataRows[i];
-        // More robust CSV parsing: handle quoted fields
         const rowValues = [];
         let currentField = '';
         let inQuotes = false;
@@ -88,9 +86,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             const char = rowString[charIndex];
             if (char === '"') {
                 if (inQuotes && charIndex + 1 < rowString.length && rowString[charIndex + 1] === '"') {
-                    // Escaped quote
                     currentField += '"';
-                    charIndex++; // Skip next quote
+                    charIndex++; 
                 } else {
                     inQuotes = !inQuotes;
                 }
@@ -102,7 +99,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             }
         }
         rowValues.push(currentField.trim());
-
 
         const appName = rowValues[appNameIndex];
         const description = rowValues[descriptionIndex];
@@ -118,7 +114,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         
         try {
           const result = await validateAppCategory(input);
-          newRecords.push({
+          const newRecord: AppCategoryCheck = {
             id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`,
             app: appName,
             description,
@@ -126,29 +122,26 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             isValidCategory: result.isValidCategory,
             validationReason: result.validationReason,
             checkedAt: { seconds: Date.now() / 1000, nanoseconds: 0 },
-          });
+          };
+
+          setValidationRecords(prevRecords => 
+            [newRecord, ...prevRecords].sort((a, b) => {
+              const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
+              const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
+              return bTime - aTime;
+            })
+          );
           processedCount++;
         } catch (err) {
           console.error(`Error validating app ${appName} from CSV:`, err);
           toast({ title: `Error validating ${appName}`, description: `This app entry from CSV could not be validated. ${err instanceof Error ? err.message : "Unknown error."}`, variant: "destructive", duration: 7000});
-          // Optionally, add a placeholder or skip this record
         }
 
-        // Delay after each request if it's not the last row
         if (i < dataRows.length - 1) {
           await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
         }
       }
 
-      if (newRecords.length > 0) {
-        setValidationRecords(prevRecords => 
-          [...newRecords, ...prevRecords].sort((a, b) => {
-            const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
-            const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
-            return bTime - aTime;
-          })
-        );
-      }
       toast({ title: "CSV Validation Complete", description: `${processedCount} of ${dataRows.length} records processed successfully.` });
     } catch (error) {
       console.error("Error validating CSV:", error);

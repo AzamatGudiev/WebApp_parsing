@@ -1,3 +1,4 @@
+
 'use server';
 
 /**
@@ -42,6 +43,9 @@ Category: {{{category}}}
 
 Determine if the description is appropriate for the category. Return a reason for your decision.
 Set isValidCategory to true if it is a valid category, otherwise set to false.
+
+Specific Category Rules:
+- If the Category is "Microlending", the app description MUST explicitly state that users can take out loans or borrow money. If it does not, it is not a valid "Microlending" app.
 `,
 });
 
@@ -56,3 +60,4 @@ const validateAppCategoryFlow = ai.defineFlow(
     return output!;
   }
 );
+

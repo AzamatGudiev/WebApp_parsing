@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck } from "lucide-react";
+import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download } from "lucide-react";
 import type { AppCategoryCheck } from "@/types";
 import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
@@ -24,11 +24,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const [file, setFile] = useState<File | null>(null);
   const [isLoadingCsv, setIsLoadingCsv] = useState(false);
   const [validationRecords, setValidationRecords] = useState<AppCategoryCheck[]>(initialValidationRecords);
-  const [isMounted, setIsMounted] = useState(false); // New state for hydration fix
+  const [isMounted, setIsMounted] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    setIsMounted(true); // Component has mounted on client
+    setIsMounted(true); 
   }, []);
 
   useEffect(() => {
@@ -51,7 +51,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     setIsLoadingCsv(true);
     try {
       const fileContent = await file.text();
-      // Handles both CRLF and LF line endings, and filters out empty lines
       const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
 
       if (lines.length < 2) {
@@ -76,9 +75,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
 
       for (let i = 0; i < dataRows.length; i++) {
         const rowString = dataRows[i];
-        // This simple split assumes commas are only delimiters and fields do not contain escaped commas.
-        // For more robust CSV parsing, a dedicated library would be recommended for production use.
-        const rowValues = rowString.split(',').map(val => val.trim());
+        const rowValues = rowString.split(',').map(val => val.trim()); // Basic split, consider more robust parsing for complex CSVs
 
         const appName = rowValues[appNameIndex];
         const description = rowValues[descriptionIndex];
@@ -94,7 +91,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         
         newRecordsPromises.push(
           validateAppCategory(input).then(result => ({
-            id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`, // added randomness for better key
+            id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`,
             app: appName,
             description,
             originalCategory: category,
@@ -134,6 +131,54 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
   };
 
+  const escapeCsvField = (field: string | number | boolean): string => {
+    const stringField = String(field);
+    // If the field contains a comma, double quote, or newline, enclose in double quotes
+    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
+      // Escape existing double quotes by doubling them
+      return `"${stringField.replace(/"/g, '""')}"`;
+    }
+    return stringField;
+  };
+
+  const handleDownloadCsv = () => {
+    if (validationRecords.length === 0) {
+      toast({ title: "No data to download", description: "There are no validation records to export.", variant: "default" });
+      return;
+    }
+
+    const headers = ["App Name", "Description", "Original Category", "Is Valid Category", "Validation Reason", "Checked At"];
+    const csvRows = [
+      headers.join(','),
+      ...validationRecords.map(record => [
+        escapeCsvField(record.app),
+        escapeCsvField(record.description),
+        escapeCsvField(record.originalCategory),
+        escapeCsvField(record.isValidCategory),
+        escapeCsvField(record.validationReason),
+        escapeCsvField(isMounted ? formatTimestamp(record.checkedAt) : 'N/A')
+      ].join(','))
+    ];
+    
+    const csvString = csvRows.join('\r\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) { // feature detection
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'validation_results.csv');
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      toast({ title: "Download Started", description: "Your CSV file is being downloaded." });
+    } else {
+      toast({ title: "Download Failed", description: "Your browser does not support direct CSV downloads.", variant: "destructive" });
+    }
+  };
+
+
   return (
     <TooltipProvider>
       <div className="flex flex-col min-h-screen">
@@ -147,26 +192,37 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         <main className="flex-1 p-4 md:p-8 container mx-auto">
           <PageHeader 
             title="Validation Dashboard"
-            description="Overview of app category validations. Upload a CSV to batch validate."
+            description="Overview of app category validations. Upload a CSV to batch validate or download current results."
           />
 
           <Card className="mb-8 shadow-lg rounded-lg">
             <CardHeader>
-              <CardTitle>Validate via CSV</CardTitle>
-              <CardDescription>Upload a CSV file with columns: appName, description, category (case-insensitive headers).</CardDescription>
+              <CardTitle>Manage Validations</CardTitle>
+              <CardDescription>Upload a CSV file (appName, description, category) or download existing results.</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4 sm:flex-row items-center">
-              <Input 
-                id="csv-upload" 
-                type="file" 
-                accept=".csv" 
-                onChange={handleFileChange} 
-                className="flex-grow"
-                aria-label="Upload CSV file"
-              />
-              <Button onClick={handleValidateCsv} disabled={isLoadingCsv || !file} className="w-full sm:w-auto">
-                {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Validate CSV
+            <CardContent className="flex flex-col gap-4 sm:flex-row items-center justify-between">
+              <div className="flex flex-col sm:flex-row gap-4 items-center flex-grow">
+                <Input 
+                  id="csv-upload" 
+                  type="file" 
+                  accept=".csv" 
+                  onChange={handleFileChange} 
+                  className="flex-grow"
+                  aria-label="Upload CSV file"
+                />
+                <Button onClick={handleValidateCsv} disabled={isLoadingCsv || !file} className="w-full sm:w-auto">
+                  {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Validate CSV
+                </Button>
+              </div>
+              <Button 
+                onClick={handleDownloadCsv} 
+                disabled={validationRecords.length === 0} 
+                variant="outline" 
+                className="w-full sm:w-auto mt-4 sm:mt-0"
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Download Results
               </Button>
             </CardContent>
           </Card>
@@ -177,7 +233,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
               <CardDescription>Displaying the latest {validationRecords.length} validation results.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[calc(100vh-30rem)] md:h-auto md:max-h-[calc(100vh-32rem)]"> {/* Adjusted height for new card */}
+              <ScrollArea className="h-[calc(100vh-32rem)] md:h-auto md:max-h-[calc(100vh-34rem)]"> 
                 <Table>
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>

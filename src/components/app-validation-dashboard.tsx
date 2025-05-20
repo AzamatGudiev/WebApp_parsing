@@ -20,7 +20,7 @@ interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
 }
 
-const REQUEST_DELAY_MS = 1500; // Delay between AI requests to avoid rate limiting (1.5 seconds)
+const REQUEST_DELAY_MS = 2000; // Delay between AI requests to avoid rate limiting (2 seconds)
 
 export function AppValidationDashboard({ initialValidationRecords }: AppValidationDashboardProps) {
   const [file, setFile] = useState<File | null>(null);

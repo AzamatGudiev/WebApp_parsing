@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download } from "lucide-react";
+import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download, AlertTriangle } from "lucide-react";
 import type { AppCategoryCheck } from "@/types";
 import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
@@ -18,6 +18,13 @@ import { PageHeader } from "@/components/shared/page-header";
 
 interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
+}
+
+interface FailedRowData {
+  appName: string;
+  description: string;
+  category: string;
+  errorReason: string;
 }
 
 const REQUEST_DELAY_MS = 2000; // Delay between AI requests to avoid rate limiting (2 seconds)
@@ -30,7 +37,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const { toast } = useToast();
 
   useEffect(() => {
-    setIsMounted(true); 
+    setIsMounted(true);
   }, []);
 
   useEffect(() => {
@@ -45,6 +52,32 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
   };
 
+  const escapeCsvField = (field: string | number | boolean | undefined): string => {
+    if (field === undefined || field === null) return '';
+    const stringField = String(field);
+    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
+      return `"${stringField.replace(/"/g, '""')}"`;
+    }
+    return stringField;
+  };
+
+  const downloadCsv = (filename: string, csvString: string) => {
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) {
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } else {
+      toast({ title: "Download Failed", description: "Your browser does not support direct CSV downloads.", variant: "destructive" });
+    }
+  };
+
   const handleValidateCsv = async () => {
     if (!file) {
       toast({ title: "No file selected", description: "Please select a CSV file to validate.", variant: "destructive" });
@@ -52,6 +85,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
     setIsLoadingCsv(true);
     toast({ title: "Processing CSV...", description: "Displaying results live. Please wait, this may take a while for larger files due to API rate limits.", variant: "default", duration: 10000});
+
+    const failedRows: FailedRowData[] = [];
 
     try {
       const fileContent = await file.text();
@@ -87,7 +122,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             if (char === '"') {
                 if (inQuotes && charIndex + 1 < rowString.length && rowString[charIndex + 1] === '"') {
                     currentField += '"';
-                    charIndex++; 
+                    charIndex++;
                 } else {
                     inQuotes = !inQuotes;
                 }
@@ -107,6 +142,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         if (!appName || !description || !category) {
           console.warn(`Skipping row ${i + 1} (data line ${i+1}) due to missing data. Row content: ${rowString}`);
           toast({ title: "Skipped Row", description: `Data line ${i + 1} in CSV has missing data and was skipped.`, variant: "default", duration: 5000 });
+          failedRows.push({ appName: appName || 'N/A', description: description || 'N/A', category: category || 'N/A', errorReason: 'Missing data in row' });
           continue;
         }
         
@@ -124,7 +160,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             checkedAt: { seconds: Date.now() / 1000, nanoseconds: 0 },
           };
 
-          setValidationRecords(prevRecords => 
+          setValidationRecords(prevRecords =>
             [newRecord, ...prevRecords].sort((a, b) => {
               const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
               const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
@@ -133,8 +169,10 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           );
           processedCount++;
         } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : "Unknown AI validation error.";
           console.error(`Error validating app ${appName} from CSV:`, err);
-          toast({ title: `Error validating ${appName}`, description: `This app entry from CSV could not be validated. ${err instanceof Error ? err.message : "Unknown error."}`, variant: "destructive", duration: 7000});
+          toast({ title: `Error validating ${appName}`, description: `This app entry could not be validated. ${errorMessage}`, variant: "destructive", duration: 7000});
+          failedRows.push({ appName, description, category, errorReason: errorMessage });
         }
 
         if (i < dataRows.length - 1) {
@@ -144,24 +182,44 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
 
       toast({ title: "CSV Validation Complete", description: `${processedCount} of ${dataRows.length} records processed successfully.` });
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown CSV processing error.";
       console.error("Error validating CSV:", error);
-      toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${error instanceof Error ? error.message : "Unknown error."}`, variant: "destructive" });
+      toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
+      // Add all rows as failed if the whole file processing fails catastrophically (optional, or handle more gracefully)
     } finally {
       setIsLoadingCsv(false);
-      setFile(null); 
+      setFile(null);
       const fileInputElement = document.getElementById('csv-upload') as HTMLInputElement;
       if (fileInputElement) {
           fileInputElement.value = '';
       }
-    }
-  };
 
-  const escapeCsvField = (field: string | number | boolean): string => {
-    const stringField = String(field);
-    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
-      return `"${stringField.replace(/"/g, '""')}"`;
+      if (failedRows.length > 0) {
+        const failedHeaders = ["App Name", "Description", "Category", "Error Reason"];
+        const failedCsvRows = [
+          failedHeaders.join(','),
+          ...failedRows.map(row => [
+            escapeCsvField(row.appName),
+            escapeCsvField(row.description),
+            escapeCsvField(row.category),
+            escapeCsvField(row.errorReason)
+          ].join(','))
+        ];
+        const failedCsvString = failedCsvRows.join('\r\n');
+        downloadCsv('failed_app_validations.csv', failedCsvString);
+        toast({
+          title: "Failed Rows Exported",
+          description: `${failedRows.length} app(s) could not be processed and have been saved to 'failed_app_validations.csv'.`,
+          variant: "default",
+          duration: 10000,
+          action: (
+            <Button variant="ghost" size="sm" onClick={() => downloadCsv('failed_app_validations.csv', failedCsvString)}>
+              <Download className="mr-2 h-4 w-4" /> Download Again
+            </Button>
+          )
+        });
+      }
     }
-    return stringField;
   };
 
   const handleDownloadCsv = () => {
@@ -184,21 +242,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     ];
     
     const csvString = csvRows.join('\r\n');
-    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    if (link.download !== undefined) { 
-      const url = URL.createObjectURL(blob);
-      link.setAttribute('href', url);
-      link.setAttribute('download', 'validation_results.csv');
-      link.style.visibility = 'hidden';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      toast({ title: "Download Started", description: "Your CSV file is being downloaded." });
-    } else {
-      toast({ title: "Download Failed", description: "Your browser does not support direct CSV downloads.", variant: "destructive" });
-    }
+    downloadCsv('validation_results.csv', csvString);
+    toast({ title: "Download Started", description: "Your CSV file 'validation_results.csv' is being downloaded." });
   };
 
 
@@ -213,7 +258,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         </header>
 
         <main className="flex-1 p-4 md:p-8 container mx-auto">
-          <PageHeader 
+          <PageHeader
             title="Validation Dashboard"
             description="Overview of app category validations. Upload a CSV to batch validate or download current results."
           />
@@ -225,23 +270,23 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             </CardHeader>
             <CardContent className="flex flex-col gap-4 sm:flex-row items-center justify-between">
               <div className="flex flex-col sm:flex-row gap-4 items-center flex-grow">
-                <Input 
-                  id="csv-upload" 
-                  type="file" 
-                  accept=".csv" 
-                  onChange={handleFileChange} 
+                <Input
+                  id="csv-upload"
+                  type="file"
+                  accept=".csv"
+                  onChange={handleFileChange}
                   className="flex-grow"
                   aria-label="Upload CSV file"
                 />
                 <Button onClick={handleValidateCsv} disabled={isLoadingCsv || !file} className="w-full sm:w-auto">
-                  {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <AlertTriangle className="mr-2 h-4 w-4" />}
                   Validate CSV
                 </Button>
               </div>
-              <Button 
-                onClick={handleDownloadCsv} 
-                disabled={validationRecords.length === 0} 
-                variant="outline" 
+              <Button
+                onClick={handleDownloadCsv}
+                disabled={validationRecords.length === 0 && !isLoadingCsv}
+                variant="outline"
                 className="w-full sm:w-auto mt-4 sm:mt-0"
               >
                 <Download className="mr-2 h-4 w-4" />
@@ -256,7 +301,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
               <CardDescription>Displaying the latest {validationRecords.length} validation results.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[calc(100vh-32rem)] md:h-auto md:max-h-[calc(100vh-34rem)]"> 
+              <ScrollArea className="h-[calc(100vh-32rem)] md:h-auto md:max-h-[calc(100vh-34rem)]">
                 <Table>
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>
@@ -342,3 +387,5 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   );
 }
 
+
+    

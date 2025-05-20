@@ -20,6 +20,8 @@ interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
 }
 
+const REQUEST_DELAY_MS = 1100; // Delay between AI requests to avoid rate limiting (e.g., 1.1 seconds for ~54 RPM)
+
 export function AppValidationDashboard({ initialValidationRecords }: AppValidationDashboardProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isLoadingCsv, setIsLoadingCsv] = useState(false);
@@ -49,6 +51,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       return;
     }
     setIsLoadingCsv(true);
+    toast({ title: "Processing CSV...", description: "Please wait, this may take a while for larger files due to API rate limits.", variant: "default", duration: 10000});
+
     try {
       const fileContent = await file.text();
       const lines = fileContent.split(/\r?\n/).filter(line => line.trim() !== '');
@@ -70,12 +74,35 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         return;
       }
 
-      const newRecordsPromises: Promise<AppCategoryCheck | null>[] = [];
+      const newRecords: AppCategoryCheck[] = [];
       const dataRows = lines.slice(1);
+      let processedCount = 0;
 
       for (let i = 0; i < dataRows.length; i++) {
         const rowString = dataRows[i];
-        const rowValues = rowString.split(',').map(val => val.trim()); // Basic split, consider more robust parsing for complex CSVs
+        // More robust CSV parsing: handle quoted fields
+        const rowValues = [];
+        let currentField = '';
+        let inQuotes = false;
+        for (let charIndex = 0; charIndex < rowString.length; charIndex++) {
+            const char = rowString[charIndex];
+            if (char === '"') {
+                if (inQuotes && charIndex + 1 < rowString.length && rowString[charIndex + 1] === '"') {
+                    // Escaped quote
+                    currentField += '"';
+                    charIndex++; // Skip next quote
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (char === ',' && !inQuotes) {
+                rowValues.push(currentField.trim());
+                currentField = '';
+            } else {
+                currentField += char;
+            }
+        }
+        rowValues.push(currentField.trim());
+
 
         const appName = rowValues[appNameIndex];
         const description = rowValues[descriptionIndex];
@@ -89,8 +116,9 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         
         const input: ValidateAppCategoryInput = { app: appName, description, category };
         
-        newRecordsPromises.push(
-          validateAppCategory(input).then(result => ({
+        try {
+          const result = await validateAppCategory(input);
+          newRecords.push({
             id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`,
             app: appName,
             description,
@@ -98,26 +126,30 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             isValidCategory: result.isValidCategory,
             validationReason: result.validationReason,
             checkedAt: { seconds: Date.now() / 1000, nanoseconds: 0 },
-          })).catch(err => {
-            console.error(`Error validating app ${appName} from CSV:`, err);
-            toast({ title: `Error validating ${appName}`, description: "This app entry from CSV could not be validated.", variant: "destructive", duration: 5000});
-            return null; 
-          })
-        );
+          });
+          processedCount++;
+        } catch (err) {
+          console.error(`Error validating app ${appName} from CSV:`, err);
+          toast({ title: `Error validating ${appName}`, description: `This app entry from CSV could not be validated. ${err instanceof Error ? err.message : "Unknown error."}`, variant: "destructive", duration: 7000});
+          // Optionally, add a placeholder or skip this record
+        }
+
+        // Delay after each request if it's not the last row
+        if (i < dataRows.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
+        }
       }
 
-      const resolvedNewRecords = (await Promise.all(newRecordsPromises)).filter(record => record !== null) as AppCategoryCheck[];
-
-      if (resolvedNewRecords.length > 0) {
+      if (newRecords.length > 0) {
         setValidationRecords(prevRecords => 
-          [...resolvedNewRecords, ...prevRecords].sort((a, b) => {
+          [...newRecords, ...prevRecords].sort((a, b) => {
             const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
             const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
             return bTime - aTime;
           })
         );
       }
-      toast({ title: "CSV Validation Complete", description: `${resolvedNewRecords.length} of ${dataRows.length} records processed successfully.` });
+      toast({ title: "CSV Validation Complete", description: `${processedCount} of ${dataRows.length} records processed successfully.` });
     } catch (error) {
       console.error("Error validating CSV:", error);
       toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${error instanceof Error ? error.message : "Unknown error."}`, variant: "destructive" });
@@ -133,9 +165,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
 
   const escapeCsvField = (field: string | number | boolean): string => {
     const stringField = String(field);
-    // If the field contains a comma, double quote, or newline, enclose in double quotes
-    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
-      // Escape existing double quotes by doubling them
+    if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n') || stringField.includes('\r')) {
       return `"${stringField.replace(/"/g, '""')}"`;
     }
     return stringField;
@@ -163,7 +193,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     const csvString = csvRows.join('\r\n');
     const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
-    if (link.download !== undefined) { // feature detection
+    if (link.download !== undefined) { 
       const url = URL.createObjectURL(blob);
       link.setAttribute('href', url);
       link.setAttribute('download', 'validation_results.csv');
@@ -292,7 +322,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                             </Tooltip>
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground">
-                          {isMounted ? formatTimestamp(record.checkedAt) : null}
+                          {isMounted ? formatTimestamp(record.checkedAt) : 'N/A'}
                         </TableCell>
                       </TableRow>
                     ))}

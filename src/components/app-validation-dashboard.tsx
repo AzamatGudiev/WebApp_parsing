@@ -24,7 +24,12 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const [file, setFile] = useState<File | null>(null);
   const [isLoadingCsv, setIsLoadingCsv] = useState(false);
   const [validationRecords, setValidationRecords] = useState<AppCategoryCheck[]>(initialValidationRecords);
+  const [isMounted, setIsMounted] = useState(false); // New state for hydration fix
   const { toast } = useToast();
+
+  useEffect(() => {
+    setIsMounted(true); // Component has mounted on client
+  }, []);
 
   useEffect(() => {
     setValidationRecords(initialValidationRecords);
@@ -231,7 +236,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                             </Tooltip>
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground">
-                          {formatTimestamp(record.checkedAt)}
+                          {isMounted ? formatTimestamp(record.checkedAt) : null}
                         </TableCell>
                       </TableRow>
                     ))}

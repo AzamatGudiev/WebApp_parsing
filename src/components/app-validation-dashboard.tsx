@@ -97,7 +97,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     for (let i = 0; i < rowsToProcess.length; i++) {
       if (wasCancelledRef.current) {
         toast({ title: isRetry ? "Retry Stopped" : "Validation Stopped", description: "Process was cancelled by the user.", variant: "default" });
-        setProcessingStatus('');
+        // Don't clear processingStatus here, let the caller handle it based on cancellation.
         break;
       }
 
@@ -154,6 +154,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
 
     const rowsForValidation: { appName: string; description: string; category: string; }[] = [];
     const initialParsingFailedRows: FailedRowData[] = [];
+    let successfullyProcessedInThisRun: AppCategoryCheck[] = [];
 
     try {
       const fileContent = await file.text();
@@ -213,7 +214,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         rowsForValidation.push({ appName, description, category });
       }
 
-      const { newFailedRows: aiValidationFailedRows } = await processValidation(rowsForValidation, false);
+      const { successfulRecords: currentRunSuccess, newFailedRows: aiValidationFailedRows } = await processValidation(rowsForValidation, false);
+      successfullyProcessedInThisRun = currentRunSuccess;
       setRetryableFailedRows(aiValidationFailedRows);
 
       const allFailedForDownload = [...initialParsingFailedRows, ...aiValidationFailedRows];
@@ -225,7 +227,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         }
       }
 
-      if (allFailedForDownload.length > 0) {
+      if (allFailedForDownload.length > 0 && !wasCancelledRef.current) { // Only download failed if not cancelled
         const failedHeaders = ["App Name", "Description", "Category", "Error Reason"];
         const failedCsvRows = [
           failedHeaders.join(','),
@@ -259,7 +261,26 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
     } finally {
       setIsLoadingCsv(false);
-      if (!wasCancelledRef.current) setProcessingStatus('');
+      if (wasCancelledRef.current) {
+        if (successfullyProcessedInThisRun.length > 0) {
+            toast({
+                title: "Process Cancelled",
+                description: `Downloading all ${validationRecords.length} successfully validated record(s) collected so far.`,
+                duration: 7000
+            });
+            handleDownloadCsv();
+        } else {
+            toast({
+                title: "Process Cancelled",
+                description: "No new records were validated in this session before cancellation.",
+                variant: "default",
+                duration: 5000
+            });
+        }
+        setProcessingStatus('Validation process was cancelled.');
+      } else {
+        setProcessingStatus('');
+      }
     }
   };
 
@@ -273,24 +294,53 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     toast({ title: "Retrying Failed Validations...", description: `Attempting to validate ${retryableFailedRows.length} app(s).`, variant: "default", duration: 10000 });
 
     const rowsToRetry = [...retryableFailedRows];
-    setRetryableFailedRows([]);
+    setRetryableFailedRows([]); // Clear for this retry session
+    let successfullyRetriedInThisRun: AppCategoryCheck[] = [];
 
-    const { newFailedRows } = await processValidation(rowsToRetry, true);
-    setRetryableFailedRows(newFailedRows);
+    try {
+        const { successfulRecords: currentRunSuccess, newFailedRows } = await processValidation(rowsToRetry, true);
+        successfullyRetriedInThisRun = currentRunSuccess;
+        setRetryableFailedRows(newFailedRows); // Set any newly failed ones from this retry
 
-    if (!wasCancelledRef.current) {
-      toast({ title: "Retry Process Complete", description: `${rowsToRetry.length - newFailedRows.length} of ${rowsToRetry.length} previously failed records validated successfully.` });
-      if (newFailedRows.length > 0) {
-         toast({ title: "Some Retries Failed", description: `${newFailedRows.length} app(s) failed validation again. Check 'failed_app_validations.csv' if downloaded, or retry again.`, variant: "destructive", duration: 10000 });
-      }
+        if (!wasCancelledRef.current) {
+          toast({ title: "Retry Process Complete", description: `${rowsToRetry.length - newFailedRows.length} of ${rowsToRetry.length} previously failed records validated successfully.` });
+          if (newFailedRows.length > 0) {
+             toast({ title: "Some Retries Failed", description: `${newFailedRows.length} app(s) failed validation again. Check 'failed_app_validations.csv' if downloaded, or retry again.`, variant: "destructive", duration: 10000 });
+          }
+        }
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Unknown retry processing error.";
+        console.error("Error retrying validations:", error);
+        toast({ title: "Error Retrying Validations", description: errorMessage, variant: "destructive" });
+        setRetryableFailedRows(rowsToRetry); // Add them back if the whole retry process errored
+    } finally {
+        setIsRetryingFailed(false);
+        if (wasCancelledRef.current) {
+            if (successfullyRetriedInThisRun.length > 0) {
+                toast({
+                    title: "Retry Process Cancelled",
+                    description: `Downloading all ${validationRecords.length} successfully validated record(s) collected so far.`,
+                    duration: 7000
+                });
+                handleDownloadCsv();
+            } else {
+                 toast({
+                    title: "Retry Process Cancelled",
+                    description: "No new records were re-validated in this session before cancellation.",
+                    variant: "default",
+                    duration: 5000
+                });
+            }
+            setProcessingStatus('Retry process was cancelled.');
+        } else {
+            setProcessingStatus('');
+        }
     }
-
-    setIsRetryingFailed(false);
-    if (!wasCancelledRef.current) setProcessingStatus('');
   };
 
   const handleStopProcessing = () => {
     wasCancelledRef.current = true;
+    // The toast for stopping is now handled in the finally block of the processing functions
   };
 
   const handleDownloadCsv = () => {
@@ -493,4 +543,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       </div>
   );
 }
+    
+
     

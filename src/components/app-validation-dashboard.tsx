@@ -13,6 +13,7 @@ import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download, Alert
 import type { AppCategoryCheck } from "@/types";
 import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { validateAppCategory, type ValidateAppCategoryInput } from "@/ai/flows/validate-app-category";
 import { PageHeader } from "@/components/shared/page-header";
 import { cn } from '@/lib/utils';
@@ -213,9 +214,13 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           variant: "default",
           duration: 10000,
           action: (
-            <Button variant="ghost" size="sm" onClick={() => downloadCsv('failed_app_validations.csv', failedCsvString)}>
-              <Download className="mr-2 h-4 w-4" /> Download Again
-            </Button>
+            <ToastAction altText="Download failed rows again" asChild>
+              <Button variant="ghost" size="sm" onClick={() => downloadCsv('failed_app_validations.csv', failedCsvString)}>
+                <span className="flex items-center">
+                  <Download className="mr-2 h-4 w-4" /> Download Again
+                </span>
+              </Button>
+            </ToastAction>
           )
         });
       }
@@ -306,7 +311,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             </CardHeader>
             <CardContent>
               <ScrollArea className="max-h-[60vh]">
-                <Table>
+                <Table className="min-w-[60rem]">
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>
                       <TableHead className="w-[150px]">App Name</TableHead>
@@ -340,22 +345,22 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground max-w-xs md:max-w-md">
+                        <TableCell className="text-sm text-muted-foreground"> 
                            <Tooltip>
                               <TooltipTrigger asChild>
-                                <p className="truncate cursor-default">{record.description}</p>
+                                <p className="cursor-default">{record.description}</p> 
                               </TooltipTrigger>
                               <TooltipContent side="top" align="start" className="max-w-sm bg-popover text-popover-foreground p-2 rounded shadow-lg border">
                                 <p>{record.description}</p>
                               </TooltipContent>
                             </Tooltip>
                         </TableCell>
-                        <TableCell className="text-sm italic max-w-xs md:max-w-md">
+                        <TableCell className="text-sm italic"> 
                            <Tooltip>
                               <TooltipTrigger asChild>
                                 <div className="flex items-start">
                                   <Info size={16} className="mr-2 mt-0.5 shrink-0 text-muted-foreground"/>
-                                  <p className="truncate cursor-default">{record.validationReason}</p>
+                                  <p className="cursor-default">{record.validationReason}</p> 
                                 </div>
                               </TooltipTrigger>
                               <TooltipContent side="top" align="start" className="max-w-sm bg-popover text-popover-foreground p-2 rounded shadow-lg border">
@@ -390,3 +395,4 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     </TooltipProvider>
   );
 }
+

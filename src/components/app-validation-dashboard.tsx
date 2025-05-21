@@ -8,14 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download, AlertTriangle, Play, StopCircle, RefreshCw } from "lucide-react";
+import { CheckCircle2, XCircle, Tag, Play, StopCircle, Download, RefreshCw } from "lucide-react";
 import type { AppCategoryCheck } from "@/types";
 import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { validateAppCategory, type ValidateAppCategoryInput } from "@/ai/flows/validate-app-category";
 import { PageHeader } from "@/components/shared/page-header";
-import { cn } from '@/lib/utils';
+import { TruncatedTextCell } from '@/components/shared/truncated-text-cell'; // Added import
 
 interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
@@ -39,7 +39,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const { toast } = useToast();
 
   const [processingStatus, setProcessingStatus] = useState<string>('');
-  const wasCancelledRef = useRef<boolean>(false); // Using ref to manage cancellation across async operations
+  const wasCancelledRef = useRef<boolean>(false);
   const [retryableFailedRows, setRetryableFailedRows] = useState<FailedRowData[]>([]);
 
 
@@ -54,8 +54,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
       setFile(event.target.files[0]);
-      setRetryableFailedRows([]); // Clear previous retryable errors when a new file is selected
-      wasCancelledRef.current = false; // Reset cancellation flag
+      setRetryableFailedRows([]); 
+      wasCancelledRef.current = false; 
     } else {
       setFile(null);
     }
@@ -97,6 +97,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     for (let i = 0; i < rowsToProcess.length; i++) {
       if (wasCancelledRef.current) {
         toast({ title: isRetry ? "Retry Stopped" : "Validation Stopped", description: "Process was cancelled by the user.", variant: "default" });
+        setProcessingStatus('');
         break;
       }
 
@@ -148,11 +149,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
     setIsLoadingCsv(true);
     wasCancelledRef.current = false;
-    setRetryableFailedRows([]); // Clear previous errors for a new main validation run
+    setRetryableFailedRows([]); 
     toast({ title: "Processing CSV...", description: "Displaying results live. Please wait, this may take a while for larger files.", variant: "default", duration: 10000});
 
     const rowsForValidation: { appName: string; description: string; category: string; }[] = [];
-    const initialParsingFailedRows: FailedRowData[] = []; // For rows that fail basic parsing
+    const initialParsingFailedRows: FailedRowData[] = []; 
 
     try {
       const fileContent = await file.text();
@@ -178,7 +179,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       const dataRows = lines.slice(1);
       for (let i = 0; i < dataRows.length; i++) {
         const rowString = dataRows[i];
-        // Basic CSV parsing, can be improved for more complex CSVs
         const rowValues = [];
         let currentField = '';
         let inQuotes = false;
@@ -186,7 +186,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             const char = rowString[charIndex];
             if (char === '"') {
                 if (inQuotes && charIndex + 1 < rowString.length && rowString[charIndex + 1] === '"') {
-                    currentField += '"'; // Escaped quote
+                    currentField += '"'; 
                     charIndex++;
                 } else {
                     inQuotes = !inQuotes;
@@ -214,7 +214,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       }
 
       const { newFailedRows: aiValidationFailedRows } = await processValidation(rowsForValidation, false);
-      setRetryableFailedRows(aiValidationFailedRows); // Store AI-specific failures for retry
+      setRetryableFailedRows(aiValidationFailedRows); 
 
       const allFailedForDownload = [...initialParsingFailedRows, ...aiValidationFailedRows];
 
@@ -246,7 +246,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           action: (
             <ToastAction altText="Download failed rows again" asChild>
               <Button variant="ghost" size="sm" onClick={() => downloadCsvFile('failed_app_validations.csv', failedCsvString)}>
-                <Download className="mr-2 h-4 w-4" /> Download Again
+                <Download className="mr-2 h-4 w-4" /> <span>Download Again</span>
               </Button>
             </ToastAction>
           )
@@ -259,8 +259,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
     } finally {
       setIsLoadingCsv(false);
-      setProcessingStatus('');
-      // Do not reset file input here, user might want to retry or restart
+      if (!wasCancelledRef.current) setProcessingStatus('');
     }
   };
 
@@ -273,11 +272,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     wasCancelledRef.current = false;
     toast({ title: "Retrying Failed Validations...", description: `Attempting to validate ${retryableFailedRows.length} app(s).`, variant: "default", duration: 10000 });
 
-    const rowsToRetry = [...retryableFailedRows]; // Work on a copy
-    setRetryableFailedRows([]); // Clear the state to accumulate new failures from this retry pass
+    const rowsToRetry = [...retryableFailedRows]; 
+    setRetryableFailedRows([]); 
 
     const { newFailedRows } = await processValidation(rowsToRetry, true);
-    setRetryableFailedRows(newFailedRows); // Update with any rows that failed again
+    setRetryableFailedRows(newFailedRows);
 
     if (!wasCancelledRef.current) {
       toast({ title: "Retry Process Complete", description: `${rowsToRetry.length - newFailedRows.length} of ${rowsToRetry.length} previously failed records validated successfully.` });
@@ -287,13 +286,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
     
     setIsRetryingFailed(false);
-    setProcessingStatus('');
+    if (!wasCancelledRef.current) setProcessingStatus('');
   };
 
   const handleStopProcessing = () => {
     wasCancelledRef.current = true;
-    // The processing loop will check this flag and stop.
-    // Toast message is handled inside the loop when it breaks.
   };
 
   const handleDownloadCsv = () => {
@@ -324,7 +321,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       <div className="flex flex-col min-h-screen">
         <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="container flex h-16 items-center">
-            <ShieldCheck className="h-7 w-7 mr-2 text-primary" />
+            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-2"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/><path d="M12 22V12"/></svg>
             <h1 className="text-xl font-semibold">ValidateWise</h1>
           </div>
         </header>
@@ -338,7 +335,10 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           <Card className="mb-8 shadow-lg rounded-lg transition-all duration-200 ease-in-out hover:shadow-xl">
             <CardHeader>
               <CardTitle>Manage Validations</CardTitle>
-              <CardDescription>Upload a CSV file (appName, description, category) or download existing results. {processingStatus && <span className="block mt-2 text-sm text-primary">{processingStatus}</span>}</CardDescription>
+              <CardDescription>
+                Upload a CSV file (appName, description, category) or download existing results.
+                {processingStatus && <span className="block mt-2 text-sm text-primary">{processingStatus}</span>}
+              </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
@@ -410,8 +410,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                       <TableHead className="w-[150px] px-4 py-3">App Name</TableHead>
                       <TableHead className="w-[150px] px-4 py-3">Original Category</TableHead>
                       <TableHead className="w-[120px] px-4 py-3">Status</TableHead>
-                      <TableHead className="min-w-[300px] px-4 py-3">Description</TableHead>
-                      <TableHead className="min-w-[300px] px-4 py-3">Validation Reason</TableHead>
+                      <TableHead className="min-w-[250px] max-w-[350px] px-4 py-3">Description</TableHead>
+                      <TableHead className="min-w-[250px] max-w-[350px] px-4 py-3">Validation Reason</TableHead>
                       <TableHead className="w-[180px] text-right px-4 py-3">Checked At</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -427,7 +427,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                         </TableCell>
                         <TableCell className="px-4 py-3 align-top">
                           {record.isValidCategory ? (
-                            <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600 text-emerald-foreground">
+                            <Badge variant="default" className="bg-green-500 hover:bg-green-600 text-white">
                               <CheckCircle2 className="mr-1 h-4 w-4" />
                               Valid
                             </Badge>
@@ -438,14 +438,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground px-4 py-3 align-top whitespace-pre-wrap break-words"> 
-                           {record.description}
+                        <TableCell className="text-sm text-muted-foreground px-4 py-3 align-top"> 
+                           <TruncatedTextCell text={record.description} title="Full App Description" maxLength={120} />
                         </TableCell>
-                        <TableCell className="text-sm italic px-4 py-3 align-top whitespace-pre-wrap break-words"> 
-                           <div className="flex items-start">
-                             <Info size={16} className="mr-2 mt-0.5 shrink-0 text-muted-foreground"/>
-                             <span className="flex-1">{record.validationReason}</span>
-                           </div>
+                        <TableCell className="text-sm px-4 py-3 align-top"> 
+                           <TruncatedTextCell text={record.validationReason} title="Full Validation Reason" maxLength={100} />
                         </TableCell>
                         <TableCell className="text-right text-sm text-muted-foreground px-4 py-3 align-top">
                           {isMounted ? formatTimestamp(record.checkedAt) : 'N/A'}

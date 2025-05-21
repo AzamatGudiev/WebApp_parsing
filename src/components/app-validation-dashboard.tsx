@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { validateAppCategory, type ValidateAppCategoryInput } from "@/ai/flows/validate-app-category";
 import { PageHeader } from "@/components/shared/page-header";
-import { TruncatedTextCell } from '@/components/shared/truncated-text-cell'; // Added import
+import { TruncatedTextCell } from '@/components/shared/truncated-text-cell';
 
 interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
@@ -470,4 +470,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       </div>
   );
 }
+    
+
     

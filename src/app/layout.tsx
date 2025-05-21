@@ -10,7 +10,7 @@ const fontSans = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'Category Cop',
+  title: 'ValidateWise',
   description: 'AI-Powered App Category Validation',
 };
 

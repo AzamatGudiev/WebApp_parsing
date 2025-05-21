@@ -15,6 +15,7 @@ import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
 import { validateAppCategory, type ValidateAppCategoryInput } from "@/ai/flows/validate-app-category";
 import { PageHeader } from "@/components/shared/page-header";
+import { cn } from '@/lib/utils';
 
 interface AppValidationDashboardProps {
   initialValidationRecords: AppCategoryCheck[];
@@ -185,7 +186,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       const errorMessage = error instanceof Error ? error.message : "Unknown CSV processing error.";
       console.error("Error validating CSV:", error);
       toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
-      // Add all rows as failed if the whole file processing fails catastrophically (optional, or handle more gracefully)
     } finally {
       setIsLoadingCsv(false);
       setFile(null);
@@ -253,7 +253,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="container flex h-16 items-center">
             <ShieldCheck className="h-7 w-7 mr-2 text-primary" />
-            <h1 className="text-xl font-semibold">Category Cop</h1>
+            <h1 className="text-xl font-semibold">ValidateWise</h1>
           </div>
         </header>
 
@@ -263,7 +263,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             description="Overview of app category validations. Upload a CSV to batch validate or download current results."
           />
 
-          <Card className="mb-8 shadow-lg rounded-lg">
+          <Card className="mb-8 shadow-lg rounded-lg transition-all duration-200 ease-in-out hover:shadow-xl">
             <CardHeader>
               <CardTitle>Manage Validations</CardTitle>
               <CardDescription>Upload a CSV file (appName, description, category) or download existing results.</CardDescription>
@@ -278,7 +278,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                   className="flex-grow"
                   aria-label="Upload CSV file"
                 />
-                <Button onClick={handleValidateCsv} disabled={isLoadingCsv || !file} className="w-full sm:w-auto">
+                <Button 
+                  onClick={handleValidateCsv} 
+                  disabled={isLoadingCsv || !file} 
+                  className="w-full sm:w-auto transition-transform duration-150 ease-in-out hover:scale-105"
+                >
                   {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <AlertTriangle className="mr-2 h-4 w-4" />}
                   Validate CSV
                 </Button>
@@ -287,7 +291,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                 onClick={handleDownloadCsv}
                 disabled={validationRecords.length === 0 && !isLoadingCsv}
                 variant="outline"
-                className="w-full sm:w-auto mt-4 sm:mt-0"
+                className="w-full sm:w-auto mt-4 sm:mt-0 transition-transform duration-150 ease-in-out hover:scale-105"
               >
                 <Download className="mr-2 h-4 w-4" />
                 Download Results
@@ -295,13 +299,13 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             </CardContent>
           </Card>
           
-          <Card className="shadow-lg rounded-lg">
+          <Card className="shadow-lg rounded-lg transition-all duration-200 ease-in-out hover:shadow-xl">
             <CardHeader>
               <CardTitle>App Category Validation Records</CardTitle>
               <CardDescription>Displaying the latest {validationRecords.length} validation results.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[calc(100vh-32rem)] md:h-auto md:max-h-[calc(100vh-34rem)]">
+              <ScrollArea className="max-h-[60vh]">
                 <Table>
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>
@@ -386,6 +390,3 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     </TooltipProvider>
   );
 }
-
-
-    

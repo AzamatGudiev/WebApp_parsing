@@ -1,15 +1,14 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download, AlertTriangle } from "lucide-react";
+import { CheckCircle2, XCircle, Info, Tag, Loader2, ShieldCheck, Download, AlertTriangle, Play, StopCircle, RefreshCw } from "lucide-react";
 import type { AppCategoryCheck } from "@/types";
 import { formatTimestamp } from "@/lib/date-utils";
 import { useToast } from "@/hooks/use-toast";
@@ -29,14 +28,20 @@ interface FailedRowData {
   errorReason: string;
 }
 
-const REQUEST_DELAY_MS = 2000; // Delay between AI requests to avoid rate limiting (2 seconds)
+const REQUEST_DELAY_MS = 2000; // Delay between AI requests
 
 export function AppValidationDashboard({ initialValidationRecords }: AppValidationDashboardProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isLoadingCsv, setIsLoadingCsv] = useState(false);
+  const [isRetryingFailed, setIsRetryingFailed] = useState(false);
   const [validationRecords, setValidationRecords] = useState<AppCategoryCheck[]>(initialValidationRecords);
   const [isMounted, setIsMounted] = useState(false);
   const { toast } = useToast();
+
+  const [processingStatus, setProcessingStatus] = useState<string>('');
+  const wasCancelledRef = useRef<boolean>(false); // Using ref to manage cancellation across async operations
+  const [retryableFailedRows, setRetryableFailedRows] = useState<FailedRowData[]>([]);
+
 
   useEffect(() => {
     setIsMounted(true);
@@ -49,6 +54,8 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
       setFile(event.target.files[0]);
+      setRetryableFailedRows([]); // Clear previous retryable errors when a new file is selected
+      wasCancelledRef.current = false; // Reset cancellation flag
     } else {
       setFile(null);
     }
@@ -63,7 +70,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     return stringField;
   };
 
-  const downloadCsv = (filename: string, csvString: string) => {
+  const downloadCsvFile = (filename: string, csvString: string) => {
     const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     if (link.download !== undefined) {
@@ -80,15 +87,72 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     }
   };
 
+  const processValidation = async (
+    rowsToProcess: { appName: string; description: string; category: string; originalIndex?: number }[],
+    isRetry: boolean
+  ): Promise<{ successfulRecords: AppCategoryCheck[], newFailedRows: FailedRowData[] }> => {
+    const currentBatchSuccessful: AppCategoryCheck[] = [];
+    const currentBatchFailed: FailedRowData[] = [];
+    
+    for (let i = 0; i < rowsToProcess.length; i++) {
+      if (wasCancelledRef.current) {
+        toast({ title: isRetry ? "Retry Stopped" : "Validation Stopped", description: "Process was cancelled by the user.", variant: "default" });
+        break;
+      }
+
+      const { appName, description, category } = rowsToProcess[i];
+      setProcessingStatus(`${isRetry ? 'Retrying' : 'Processing'} app ${i + 1} of ${rowsToProcess.length}: ${appName}`);
+      
+      const input: ValidateAppCategoryInput = { app: appName, description, category };
+      
+      try {
+        const result = await validateAppCategory(input);
+        const newRecord: AppCategoryCheck = {
+          id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`,
+          app: appName,
+          description,
+          originalCategory: category,
+          isValidCategory: result.isValidCategory,
+          validationReason: result.validationReason,
+          checkedAt: { seconds: Date.now() / 1000, nanoseconds: 0 },
+        };
+        
+        currentBatchSuccessful.push(newRecord);
+        setValidationRecords(prevRecords =>
+          [newRecord, ...prevRecords].sort((a, b) => {
+            const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
+            const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
+            return bTime - aTime;
+          })
+        );
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Unknown AI validation error.";
+        console.error(`Error validating app ${appName}:`, err);
+        toast({ title: `Error validating ${appName}`, description: `This app entry could not be validated. ${errorMessage}`, variant: "destructive", duration: 7000});
+        const failedData = { appName, description, category, errorReason: errorMessage };
+        currentBatchFailed.push(failedData);
+      }
+
+      if (i < rowsToProcess.length - 1 && !wasCancelledRef.current) {
+        await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
+      }
+    }
+    return { successfulRecords: currentBatchSuccessful, newFailedRows: currentBatchFailed };
+  };
+
+
   const handleValidateCsv = async () => {
     if (!file) {
       toast({ title: "No file selected", description: "Please select a CSV file to validate.", variant: "destructive" });
       return;
     }
     setIsLoadingCsv(true);
-    toast({ title: "Processing CSV...", description: "Displaying results live. Please wait, this may take a while for larger files due to API rate limits.", variant: "default", duration: 10000});
+    wasCancelledRef.current = false;
+    setRetryableFailedRows([]); // Clear previous errors for a new main validation run
+    toast({ title: "Processing CSV...", description: "Displaying results live. Please wait, this may take a while for larger files.", variant: "default", duration: 10000});
 
-    const failedRows: FailedRowData[] = [];
+    const rowsForValidation: { appName: string; description: string; category: string; }[] = [];
+    const initialParsingFailedRows: FailedRowData[] = []; // For rows that fail basic parsing
 
     try {
       const fileContent = await file.text();
@@ -112,10 +176,9 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
       }
 
       const dataRows = lines.slice(1);
-      let processedCount = 0;
-
       for (let i = 0; i < dataRows.length; i++) {
         const rowString = dataRows[i];
+        // Basic CSV parsing, can be improved for more complex CSVs
         const rowValues = [];
         let currentField = '';
         let inQuotes = false;
@@ -123,7 +186,7 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
             const char = rowString[charIndex];
             if (char === '"') {
                 if (inQuotes && charIndex + 1 < rowString.length && rowString[charIndex + 1] === '"') {
-                    currentField += '"';
+                    currentField += '"'; // Escaped quote
                     charIndex++;
                 } else {
                     inQuotes = !inQuotes;
@@ -137,69 +200,36 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
         }
         rowValues.push(currentField.trim());
 
+
         const appName = rowValues[appNameIndex];
         const description = rowValues[descriptionIndex];
         const category = rowValues[categoryIndex];
 
         if (!appName || !description || !category) {
-          console.warn(`Skipping row ${i + 1} (data line ${i+1}) due to missing data. Row content: ${rowString}`);
-          toast({ title: "Skipped Row", description: `Data line ${i + 1} in CSV has missing data and was skipped.`, variant: "default", duration: 5000 });
-          failedRows.push({ appName: appName || 'N/A', description: description || 'N/A', category: category || 'N/A', errorReason: 'Missing data in row' });
+          console.warn(`Skipping row ${i + 2} due to missing data. Row content: ${rowString}`);
+          initialParsingFailedRows.push({ appName: appName || 'N/A', description: description || 'N/A', category: category || 'N/A', errorReason: 'Missing data in row' });
           continue;
         }
-        
-        const input: ValidateAppCategoryInput = { app: appName, description, category };
-        
-        try {
-          const result = await validateAppCategory(input);
-          const newRecord: AppCategoryCheck = {
-            id: `csv-${Date.now()}-${i}-${Math.random().toString(36).substring(7)}`,
-            app: appName,
-            description,
-            originalCategory: category,
-            isValidCategory: result.isValidCategory,
-            validationReason: result.validationReason,
-            checkedAt: { seconds: Date.now() / 1000, nanoseconds: 0 },
-          };
-
-          setValidationRecords(prevRecords =>
-            [newRecord, ...prevRecords].sort((a, b) => {
-              const aTime = typeof a.checkedAt === 'string' ? new Date(a.checkedAt).getTime() / 1000 : a.checkedAt.seconds;
-              const bTime = typeof b.checkedAt === 'string' ? new Date(b.checkedAt).getTime() / 1000 : b.checkedAt.seconds;
-              return bTime - aTime;
-            })
-          );
-          processedCount++;
-        } catch (err) {
-          const errorMessage = err instanceof Error ? err.message : "Unknown AI validation error.";
-          console.error(`Error validating app ${appName} from CSV:`, err);
-          toast({ title: `Error validating ${appName}`, description: `This app entry could not be validated. ${errorMessage}`, variant: "destructive", duration: 7000});
-          failedRows.push({ appName, description, category, errorReason: errorMessage });
-        }
-
-        if (i < dataRows.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
-        }
+        rowsForValidation.push({ appName, description, category });
       }
 
-      toast({ title: "CSV Validation Complete", description: `${processedCount} of ${dataRows.length} records processed successfully.` });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown CSV processing error.";
-      console.error("Error validating CSV:", error);
-      toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
-    } finally {
-      setIsLoadingCsv(false);
-      setFile(null);
-      const fileInputElement = document.getElementById('csv-upload') as HTMLInputElement;
-      if (fileInputElement) {
-          fileInputElement.value = '';
-      }
+      const { newFailedRows: aiValidationFailedRows } = await processValidation(rowsForValidation, false);
+      setRetryableFailedRows(aiValidationFailedRows); // Store AI-specific failures for retry
 
-      if (failedRows.length > 0) {
+      const allFailedForDownload = [...initialParsingFailedRows, ...aiValidationFailedRows];
+
+      if (!wasCancelledRef.current) {
+         toast({ title: "CSV Validation Complete", description: `${rowsForValidation.length - aiValidationFailedRows.length} of ${rowsForValidation.length} processable records validated. ${initialParsingFailedRows.length} records failed parsing.` });
+        if (aiValidationFailedRows.length > 0) {
+          toast({ title: "Retry Available", description: `${aiValidationFailedRows.length} app(s) failed AI validation and can be retried.`, variant: "default", duration: 10000 });
+        }
+      }
+      
+      if (allFailedForDownload.length > 0) {
         const failedHeaders = ["App Name", "Description", "Category", "Error Reason"];
         const failedCsvRows = [
           failedHeaders.join(','),
-          ...failedRows.map(row => [
+          ...allFailedForDownload.map(row => [
             escapeCsvField(row.appName),
             escapeCsvField(row.description),
             escapeCsvField(row.category),
@@ -207,24 +237,63 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           ].join(','))
         ];
         const failedCsvString = failedCsvRows.join('\r\n');
-        downloadCsv('failed_app_validations.csv', failedCsvString);
+        downloadCsvFile('failed_app_validations.csv', failedCsvString);
         toast({
           title: "Failed Rows Exported",
-          description: `${failedRows.length} app(s) could not be processed and have been saved to 'failed_app_validations.csv'.`,
+          description: `${allFailedForDownload.length} app(s) encountered issues and have been saved to 'failed_app_validations.csv'.`,
           variant: "default",
           duration: 10000,
           action: (
             <ToastAction altText="Download failed rows again" asChild>
-              <Button variant="ghost" size="sm" onClick={() => downloadCsv('failed_app_validations.csv', failedCsvString)}>
-                <span className="flex items-center">
-                  <Download className="mr-2 h-4 w-4" /> Download Again
-                </span>
+              <Button variant="ghost" size="sm" onClick={() => downloadCsvFile('failed_app_validations.csv', failedCsvString)}>
+                <Download className="mr-2 h-4 w-4" /> Download Again
               </Button>
             </ToastAction>
           )
         });
       }
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown CSV processing error.";
+      console.error("Error validating CSV:", error);
+      toast({ title: "Error Processing CSV", description: `Could not process the CSV file. ${errorMessage}`, variant: "destructive" });
+    } finally {
+      setIsLoadingCsv(false);
+      setProcessingStatus('');
+      // Do not reset file input here, user might want to retry or restart
     }
+  };
+
+  const handleRetryFailedValidations = async () => {
+    if (retryableFailedRows.length === 0) {
+      toast({ title: "No Rows to Retry", description: "There are no failed validations to retry.", variant: "default" });
+      return;
+    }
+    setIsRetryingFailed(true);
+    wasCancelledRef.current = false;
+    toast({ title: "Retrying Failed Validations...", description: `Attempting to validate ${retryableFailedRows.length} app(s).`, variant: "default", duration: 10000 });
+
+    const rowsToRetry = [...retryableFailedRows]; // Work on a copy
+    setRetryableFailedRows([]); // Clear the state to accumulate new failures from this retry pass
+
+    const { newFailedRows } = await processValidation(rowsToRetry, true);
+    setRetryableFailedRows(newFailedRows); // Update with any rows that failed again
+
+    if (!wasCancelledRef.current) {
+      toast({ title: "Retry Process Complete", description: `${rowsToRetry.length - newFailedRows.length} of ${rowsToRetry.length} previously failed records validated successfully.` });
+      if (newFailedRows.length > 0) {
+         toast({ title: "Some Retries Failed", description: `${newFailedRows.length} app(s) failed validation again. Check 'failed_app_validations.csv' if downloaded, or retry again.`, variant: "destructive", duration: 10000 });
+      }
+    }
+    
+    setIsRetryingFailed(false);
+    setProcessingStatus('');
+  };
+
+  const handleStopProcessing = () => {
+    wasCancelledRef.current = true;
+    // The processing loop will check this flag and stop.
+    // Toast message is handled inside the loop when it breaks.
   };
 
   const handleDownloadCsv = () => {
@@ -247,13 +316,11 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
     ];
     
     const csvString = csvRows.join('\r\n');
-    downloadCsv('validation_results.csv', csvString);
+    downloadCsvFile('validation_results.csv', csvString);
     toast({ title: "Download Started", description: "Your CSV file 'validation_results.csv' is being downloaded." });
   };
 
-
   return (
-    <TooltipProvider>
       <div className="flex flex-col min-h-screen">
         <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="container flex h-16 items-center">
@@ -271,36 +338,62 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           <Card className="mb-8 shadow-lg rounded-lg transition-all duration-200 ease-in-out hover:shadow-xl">
             <CardHeader>
               <CardTitle>Manage Validations</CardTitle>
-              <CardDescription>Upload a CSV file (appName, description, category) or download existing results.</CardDescription>
+              <CardDescription>Upload a CSV file (appName, description, category) or download existing results. {processingStatus && <span className="block mt-2 text-sm text-primary">{processingStatus}</span>}</CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-4 sm:flex-row items-center justify-between">
-              <div className="flex flex-col sm:flex-row gap-4 items-center flex-grow">
-                <Input
-                  id="csv-upload"
-                  type="file"
-                  accept=".csv"
-                  onChange={handleFileChange}
-                  className="flex-grow"
-                  aria-label="Upload CSV file"
-                />
-                <Button 
-                  onClick={handleValidateCsv} 
-                  disabled={isLoadingCsv || !file} 
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+                <div className="flex flex-col sm:flex-row gap-4 items-center flex-grow w-full sm:w-auto">
+                  <Input
+                    id="csv-upload"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileChange}
+                    className="flex-grow"
+                    aria-label="Upload CSV file"
+                    disabled={isLoadingCsv || isRetryingFailed}
+                  />
+                  {isLoadingCsv || isRetryingFailed ? (
+                    <Button 
+                      onClick={handleStopProcessing}
+                      variant="destructive"
+                      className="w-full sm:w-auto transition-transform duration-150 ease-in-out hover:scale-105"
+                    >
+                      <StopCircle className="mr-2 h-4 w-4" />
+                      Stop {isLoadingCsv ? 'Validation' : 'Retrying'}
+                    </Button>
+                  ) : (
+                    <Button 
+                      onClick={handleValidateCsv} 
+                      disabled={!file || isLoadingCsv || isRetryingFailed} 
+                      className="w-full sm:w-auto transition-transform duration-150 ease-in-out hover:scale-105"
+                    >
+                      <Play className="mr-2 h-4 w-4" />
+                      Validate CSV
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 items-center justify-start mt-2">
+                <Button
+                  onClick={handleDownloadCsv}
+                  disabled={validationRecords.length === 0 || isLoadingCsv || isRetryingFailed}
+                  variant="outline"
                   className="w-full sm:w-auto transition-transform duration-150 ease-in-out hover:scale-105"
                 >
-                  {isLoadingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <AlertTriangle className="mr-2 h-4 w-4" />}
-                  Validate CSV
+                  <Download className="mr-2 h-4 w-4" />
+                  Download Results
                 </Button>
+                {retryableFailedRows.length > 0 && !isLoadingCsv && !isRetryingFailed && (
+                   <Button 
+                    onClick={handleRetryFailedValidations} 
+                    variant="secondary"
+                    className="w-full sm:w-auto transition-transform duration-150 ease-in-out hover:scale-105"
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Retry {retryableFailedRows.length} Failed
+                  </Button>
+                )}
               </div>
-              <Button
-                onClick={handleDownloadCsv}
-                disabled={validationRecords.length === 0 && !isLoadingCsv}
-                variant="outline"
-                className="w-full sm:w-auto mt-4 sm:mt-0 transition-transform duration-150 ease-in-out hover:scale-105"
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Download Results
-              </Button>
             </CardContent>
           </Card>
           
@@ -310,29 +403,29 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
               <CardDescription>Displaying the latest {validationRecords.length} validation results.</CardDescription>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="max-h-[60vh]">
+              <ScrollArea className="max-h-[60vh] border rounded-md">
                 <Table className="min-w-[60rem]">
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow>
-                      <TableHead className="w-[150px]">App Name</TableHead>
-                      <TableHead className="w-[150px]">Original Category</TableHead>
-                      <TableHead className="w-[120px]">Status</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead className="min-w-[250px]">Validation Reason</TableHead>
-                      <TableHead className="w-[180px] text-right">Checked At</TableHead>
+                      <TableHead className="w-[150px] px-4 py-3">App Name</TableHead>
+                      <TableHead className="w-[150px] px-4 py-3">Original Category</TableHead>
+                      <TableHead className="w-[120px] px-4 py-3">Status</TableHead>
+                      <TableHead className="min-w-[300px] px-4 py-3">Description</TableHead>
+                      <TableHead className="min-w-[300px] px-4 py-3">Validation Reason</TableHead>
+                      <TableHead className="w-[180px] text-right px-4 py-3">Checked At</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {validationRecords.map((record) => (
-                      <TableRow key={record.id}>
-                        <TableCell className="font-medium">{record.app}</TableCell>
-                        <TableCell>
+                      <TableRow key={record.id} className="hover:bg-muted/50">
+                        <TableCell className="font-medium px-4 py-3 align-top">{record.app}</TableCell>
+                        <TableCell className="px-4 py-3 align-top">
                           <div className="flex items-center">
-                            <Tag className="mr-2 h-4 w-4 text-muted-foreground" />
+                            <Tag className="mr-2 h-4 w-4 text-muted-foreground shrink-0" />
                             {record.originalCategory}
                           </div>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="px-4 py-3 align-top">
                           {record.isValidCategory ? (
                             <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600 text-emerald-foreground">
                               <CheckCircle2 className="mr-1 h-4 w-4" />
@@ -345,30 +438,16 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground"> 
-                           <Tooltip>
-                              <TooltipTrigger asChild>
-                                <p className="cursor-default">{record.description}</p> 
-                              </TooltipTrigger>
-                              <TooltipContent side="top" align="start" className="max-w-sm bg-popover text-popover-foreground p-2 rounded shadow-lg border">
-                                <p>{record.description}</p>
-                              </TooltipContent>
-                            </Tooltip>
+                        <TableCell className="text-sm text-muted-foreground px-4 py-3 align-top whitespace-pre-wrap break-words"> 
+                           {record.description}
                         </TableCell>
-                        <TableCell className="text-sm italic"> 
-                           <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div className="flex items-start">
-                                  <Info size={16} className="mr-2 mt-0.5 shrink-0 text-muted-foreground"/>
-                                  <p className="cursor-default">{record.validationReason}</p> 
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" align="start" className="max-w-sm bg-popover text-popover-foreground p-2 rounded shadow-lg border">
-                                <p>{record.validationReason}</p>
-                              </TooltipContent>
-                            </Tooltip>
+                        <TableCell className="text-sm italic px-4 py-3 align-top whitespace-pre-wrap break-words"> 
+                           <div className="flex items-start">
+                             <Info size={16} className="mr-2 mt-0.5 shrink-0 text-muted-foreground"/>
+                             <span className="flex-1">{record.validationReason}</span>
+                           </div>
                         </TableCell>
-                        <TableCell className="text-right text-sm text-muted-foreground">
+                        <TableCell className="text-right text-sm text-muted-foreground px-4 py-3 align-top">
                           {isMounted ? formatTimestamp(record.checkedAt) : 'N/A'}
                         </TableCell>
                       </TableRow>
@@ -376,9 +455,9 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
                   </TableBody>
                 </Table>
               </ScrollArea>
-               {validationRecords.length === 0 && (
+               {validationRecords.length === 0 && !isLoadingCsv && !isRetryingFailed && (
                 <div className="text-center py-10 text-muted-foreground">
-                  No validation records found.
+                  No validation records found. Upload a CSV to begin.
                 </div>
               )}
             </CardContent>
@@ -392,7 +471,6 @@ export function AppValidationDashboard({ initialValidationRecords }: AppValidati
           </div>
         </footer>
       </div>
-    </TooltipProvider>
   );
 }
-
+    
